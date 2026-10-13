@@ -13,7 +13,10 @@
       "mode": "vr",
       "offer": "always",
       "features": {
-        "handTracking": true
+        "handTracking": {
+          "required": true
+        },
+        "gazeTracking": true
       }
     },
     "input": {
@@ -37,7 +40,9 @@
     },
     "features": {
       "locomotion": false,
-      "grabbing": true,
+      "grabbing": {
+        "useHandPinchForGrab": true
+      },
       "physics": false,
       "sceneUnderstanding": false,
       "environmentRaycast": false,
@@ -48,7 +53,7 @@
   },
   "dev": {
     "emulator": {
-      "device": "metaQuest3"
+      "device": "metaVRGlasses"
     }
   }
 }
