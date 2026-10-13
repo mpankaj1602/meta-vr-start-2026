@@ -1,0 +1,51 @@
+id,name,origin,track,win_mean,feasibility_mean,difficulty_mean,roles,win_judge,win_market,win_engineer,win_skeptic,win_designer
+L-v2,"Lamplight, version 2",refined or new,Productivity,6.4,3.2,3.6,5,7,6.5,6,6,6.5
+A4-R,Three Stones,refined or new,Productivity,6.0,4.0,2.0,5,6,6,6,6,6
+A4,Daily ritual object,assistant,Productivity,5.8,4.0,2.2,5,6,6,6,5,6
+L-v1,"Lamplight, version 1",assistant,Productivity,5.6,2.6,4.2,5,6,6,6,5,5
+A7,Hands-on mystery,assistant,Gaming,5.4,2.8,4.0,5,5,5,6,6,5
+N3,Snip,refined or new,Productivity,5.2,3.6,3.2,5,7,5,5,4,5
+A6-R,Paper Theatre,refined or new,Entertainment,5.2,3.0,3.8,5,6,5,5,5,5
+P7-R,Pocket Palace,refined or new,Productivity,5.0,4.0,2.8,5,5,5,5,4,6
+A1-R,Strand,refined or new,Entertainment,5.0,4.0,3.0,5,5,5,5,5,5
+A1,Playable music visualiser,assistant,Entertainment,4.8,3.8,3.0,5,5,4,5,5,5
+A7-R,Paper Trail,refined or new,Gaming,4.8,3.2,3.0,5,4,5,5,5,5
+A6,Pop-up storybook,assistant,Entertainment,4.8,3.0,3.8,5,5,4,5,5,5
+N1,Hush,refined or new,Gaming,4.6,4.0,3.0,5,5,4,5,4,5
+E3-R,Close Your Eyes,refined or new,Entertainment,4.6,3.8,3.0,5,5,4,5,4,5
+G5-R,Lantern,refined or new,Gaming,4.4,5.0,2.0,5,4,4,5,4,5
+S1-R,Owl Light,refined or new,Gaming,4.4,4.0,3.0,5,5,4,5,4,4
+A3,Tabletop duel,assistant,Gaming,4.4,3.0,4.0,5,4,4,5,5,4
+A3-R,Your Move,refined or new,Gaming,4.2,4.0,3.0,5,4,4,4,5,4
+G5,Maze solver,user,Gaming,4.0,4.0,2.0,5,4,4,4,4,4
+E3,Movement through sound,user,Entertainment,4.0,4.0,2.6,5,4,4,4,4,4
+N2,Alibi,refined or new,Gaming,4.0,4.0,2.8,5,4,5,4,3,4
+P3-R,Perigee,refined or new,Gaming,4.0,3.6,3.0,5,4,4,4,4,4
+R1-R,Quarter Turn,refined or new,Gaming,4.0,3.6,3.0,5,4,4,4,4,4
+A9,Interactive comic,assistant,Entertainment,4.0,3.0,3.0,5,4,4,4,4,4
+S2-R,Echo Wood,refined or new,Gaming,4.0,3.0,3.0,5,4,4,4,4,4
+A2,AI game master,assistant,Gaming,4.0,2.2,4.8,5,4,4,4,4,4
+D1-R,Crosscut,refined or new,Gaming,3.8,4.0,3.0,5,4,4,4,3,4
+A8,Spatial planning board,assistant,Productivity,3.8,3.2,3.2,5,4,4,4,3,4
+A2-R,The Room Rolls,refined or new,Gaming,3.8,3.0,4.0,5,4,4,4,3,4
+A5,Hand-shape learning,assistant,Gaming,3.6,3.2,3.0,5,3,4,4,3,4
+P3,Universe experience,user,Entertainment,3.6,3.0,3.4,5,4,3,4,3,4
+S1,Sonic Navigator (swipes),user,Gaming,3.4,3.0,3.0,5,4,3,4,3,3
+R1,Cube solver and learner,user,Gaming,3.0,3.2,3.4,5,3,3,3,3,3
+D1,3D sudoku,user,Gaming,3.0,3.2,3.8,5,3,3,3,3,3
+G4,Subway-style runner,user,Gaming,3.0,3.0,3.0,5,3,3,3,3,3
+S2,Sonic Navigator (head-steered),user,Gaming,3.0,3.0,3.0,5,3,3,3,3,3
+M1-R,Homing,refined or new,Gaming,3.0,3.0,3.0,5,3,3,3,3,3
+P5-R,Curio,refined or new,Gaming,2.8,3.2,3.0,5,3,3,3,2,3
+P5,The Curious Cat,user,Productivity,2.8,2.2,4.0,5,3,2,3,3,3
+G1,Bowling,user,Gaming,2.2,3.2,2.0,5,2,2,3,2,2
+P2,Learn gardening,user,Productivity,2.0,3.4,2.2,5,2,2,2,2,2
+G2,Archery,user,Gaming,2.0,3.0,3.0,5,2,2,2,2,2
+M1,Auto-run maze (head-steered),user,Gaming,2.0,3.0,3.0,5,2,2,2,2,2
+P7,Brain exercise,user,Productivity,1.8,4.0,2.0,5,2,2,2,1,2
+G3,Rafting,user,Gaming,1.8,2.0,4.0,5,2,2,2,2,1
+E2,3D converter,user,Entertainment,1.0,2.0,4.0,5,1,1,1,1,1
+P4,Vacation visualiser,user,Entertainment,1.0,2.0,4.0,5,1,1,1,1,1
+E1,Anime converter,user,Entertainment,1.0,1.0,5.0,5,1,1,1,1,1
+P1,Car driving,user,Gaming,1.0,1.0,5.0,5,1,1,1,1,1
+P6,Gym,user,Productivity,1.0,1.0,4.8,5,1,1,1,1,1
