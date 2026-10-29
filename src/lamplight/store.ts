@@ -25,13 +25,17 @@ export interface SavedState {
   /** Completed sessions (switch-offs). 0 means the first run is not done. */
   sessions: number;
   mirrored: boolean;
+  /** Persistent anchor id pinning the lamp to its spot in the room. */
+  anchorId: string | null;
+  /** True when the lamp was left on a floating tray rather than a surface. */
+  floating: boolean;
   cards: SavedCard[];
 }
 
 const KEY = 'lamplight.state.v1';
 
 export function emptyState(): SavedState {
-  return { version: 1, sessions: 0, mirrored: false, cards: [] };
+  return { version: 1, sessions: 0, mirrored: false, anchorId: null, floating: false, cards: [] };
 }
 
 export function loadState(): SavedState {
@@ -44,6 +48,8 @@ export function loadState(): SavedState {
       version: 1,
       sessions: Number(parsed.sessions) || 0,
       mirrored: Boolean(parsed.mirrored),
+      anchorId: typeof parsed.anchorId === 'string' ? parsed.anchorId : null,
+      floating: Boolean(parsed.floating),
       cards: parsed.cards.filter(isSavedCard),
     };
   } catch {

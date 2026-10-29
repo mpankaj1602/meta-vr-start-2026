@@ -17,7 +17,8 @@
           "required": true
         },
         "gazeTracking": true,
-        "hitTest": true
+        "hitTest": true,
+        "anchors": true
       }
     },
     "input": {

@@ -36,13 +36,19 @@ tomorrow and pull the chain to switch off. The concept is defined in
 This is the hand-first version: silent, hands-only and offline. Voice is not
 built yet.
 
+The lamp stays where you set it: place it once (say on the loft desk) and the
+next session opens with it there, cards and all. If you start somewhere else,
+pinch and hold on empty space for a moment to bring the lamp to you, then set
+it down; that becomes its new spot. If the headset no longer recognises the
+room, you place the lamp again.
+
 ## Configuration
 
 `iwsdk.config.json` is the project authority, not `vite.config.ts`. It is set up
 for the competition's hands-first, seated brief:
 
-- the session is `ar` (passthrough); hand tracking is required, gaze tracking
-  and hit testing are requested
+- the session is `ar` (passthrough); hand tracking is required, gaze tracking,
+  hit testing and anchors are requested
 - the SDK's grab system and locomotion are off: the app handles its own pinch
   and slide
 - outside the headset the camera looks down at a virtual desk, so the ritual can
@@ -62,6 +68,8 @@ for the competition's hands-first, seated brief:
     the mouse
   - `surface.ts`: one downward hit test to find the real desk, with a floating
     tray as fallback
+  - `anchor.ts`: a WebXR persistent anchor that keeps the lamp at its spot in
+    the room between sessions
   - `store.ts`, `rules.ts`: saved state and the lamp's local rules
   - `card-visual.ts`, `desk-dressing.ts`, `visuals.ts`: cards, light, slots,
     captions, the "tomorrow" preview, room dimming and the ghost demonstration

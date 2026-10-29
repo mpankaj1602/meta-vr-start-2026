@@ -1,5 +1,6 @@
 import { createSystem, Vector3, VisibilityState } from '@iwsdk/core';
 import type { Entity } from '@iwsdk/core';
+import { LampAnchor } from './anchor.js';
 import { CardVisual } from './card-visual.js';
 import { Card, CardZones, Lamp } from './components.js';
 import { DeskDressing } from './desk-dressing.js';
@@ -31,7 +32,7 @@ import { clearState, loadState, newCardId, saveState, tomorrowCards } from './st
 import type { SavedCard, SavedState, SavedZone } from './store.js';
 import { SurfaceProbe } from './surface.js';
 
-type Phase = 'placing' | 'settling' | 'asleep' | 'awake' | 'off';
+type Phase = 'locating' | 'placing' | 'settling' | 'asleep' | 'awake' | 'off';
 
 const BLANK_ID = 'blank';
 const TAP_DISTANCE = 0.012;
@@ -39,6 +40,12 @@ const TAP_SECONDS = 0.5;
 const NEAR_MARGIN = 0.02;
 const CHAIN_NEAR = 0.035;
 const CHAIN_FAR = 0.03;
+/** How long to wait for the device to find the saved lamp spot. */
+const LOCATE_SECONDS = 5;
+/** Pinch and hold on nothing for this long to bring the lamp to you. */
+const SUMMON_SECONDS = 1.2;
+/** Beyond this distance the lamp is "at your desk", not in front of you. */
+const FAR_LAMP = 2.0;
 
 interface CardRuntime {
   id: string;
@@ -90,6 +97,10 @@ export class RitualSystem extends createSystem({
   private dressing: DeskDressing | null = null;
   private pointers!: PointerTracker;
   private probe!: SurfaceProbe;
+  private anchor!: LampAnchor;
+  private locateT = -1;
+  private pinNextFrame = false;
+  private summon: { pointer: Pointer; start: number } | null = null;
   private page!: PageOverlay;
   private sound!: Sound;
   private state!: SavedState;
@@ -140,6 +151,7 @@ export class RitualSystem extends createSystem({
       onEnd: (p) => this.onPinchEnd(p),
     });
     this.probe = new SurfaceProbe(this.world.renderer, this.player);
+    this.anchor = new LampAnchor(this.world.renderer, this.player);
 
     const input = this.page.input;
     const onInput = () => this.updateDraft();
@@ -163,6 +175,7 @@ export class RitualSystem extends createSystem({
       () => input.removeEventListener('blur', onBlur),
       () => this.pointers.dispose(),
       () => this.probe.cancel(),
+      () => this.anchor.release(),
       this.queries.lamps.subscribe('qualify', (entity) => this.attachLamp(entity)),
       this.world.visibilityState.subscribe((v) => this.onVisibility(v)),
     );
@@ -202,8 +215,13 @@ export class RitualSystem extends createSystem({
     } else {
       this.pointers.detachSession();
       this.probe.cancel();
-      if (this.phase === 'placing' || this.phase === 'settling') this.phase = this.afterPlacing;
+      this.anchor.release();
+      this.locateT = -1;
+      this.summon = null;
+      this.pinNextFrame = false;
+      if (this.phase === 'locating' || this.phase === 'placing' || this.phase === 'settling') this.phase = this.afterPlacing;
       const lamp = this.lamp.object3D!;
+      lamp.visible = true;
       lamp.position.copy(this.homePosition);
       lamp.rotation.set(0, 0, 0);
       this.floating = false;
@@ -212,10 +230,87 @@ export class RitualSystem extends createSystem({
     }
   }
 
+  /** First XR frames: find the lamp's saved spot, or ask for it to be placed. */
+  private startImmersive(): void {
+    const id = this.state.anchorId;
+    if (!id || !this.anchor.supported) {
+      this.beginPlacing();
+      return;
+    }
+    this.afterPlacing = this.phase;
+    this.phase = 'locating';
+    this.locateT = 0;
+    this.lamp!.object3D!.visible = false;
+    void this.anchor.restore(id).then((ok) => {
+      if (!ok && this.phase === 'locating') {
+        // The device no longer knows that spot (map reset, other room).
+        this.state.anchorId = null;
+        this.save();
+        this.beginPlacing();
+      }
+    });
+  }
+
+  /** Follow the anchored spot; finish locating when the device finds it. */
+  private updateAnchor(delta: number): void {
+    if (!this.immersive) return;
+    if (this.pinNextFrame && !this.holdsLamp()) this.pinNow();
+    if (this.phase === 'locating') {
+      this.locateT += delta;
+      if (this.locateT > LOCATE_SECONDS) {
+        // Not found in time: place by hand. If the spot turns up while the
+        // lamp is still unplaced, the update below snaps the lamp to it.
+        this.beginPlacing();
+        return;
+      }
+    }
+    if (!this.anchor.tracking || this.phase === 'settling' || this.holdsLamp()) return;
+    const lamp = this.lamp!.object3D!;
+    if (!this.anchor.readPose(lamp)) return;
+    if (this.phase === 'locating' || this.phase === 'placing') {
+      this.phase = this.afterPlacing;
+      this.locateT = -1;
+      lamp.visible = true;
+      this.floating = this.state.floating;
+      this.dressing!.setTrayVisible(this.floating);
+      this.dressing!.ghost.hide();
+      this.applyCardVisibility();
+      this.world.camera.getWorldPosition(this.eye);
+      const far = lamp.position.distanceTo(this.eye) > FAR_LAMP;
+      this.dressing!.say(far ? 'Pinch and hold: lamp here' : 'Pull the chain', 4);
+    }
+  }
+
+  private holdsLamp(): boolean {
+    for (const hold of this.holds.values()) if (hold.kind === 'lamp') return true;
+    return false;
+  }
+
+  /** Save the lamp's spot in the room as a persistent anchor next frame. */
+  private pinLamp(): void {
+    this.state.floating = this.floating;
+    this.save();
+    // Anchors need the current XRFrame, and this can run from a promise.
+    this.anchor.release();
+    this.pinNextFrame = this.anchor.supported;
+  }
+
+  private pinNow(): void {
+    this.pinNextFrame = false;
+    void this.anchor.pin(this.lamp!.object3D!, this.state.anchorId).then((id) => {
+      if (!id) return;
+      this.state.anchorId = id;
+      this.save();
+    });
+  }
+
   /** Put the lamp ahead of the user, low and central, to be slid down. */
   private beginPlacing(): void {
     const lamp = this.lamp!.object3D!;
-    this.afterPlacing = this.phase === 'placing' || this.phase === 'settling' ? this.afterPlacing : this.phase;
+    this.afterPlacing =
+      this.phase === 'placing' || this.phase === 'settling' || this.phase === 'locating' ? this.afterPlacing : this.phase;
+    this.locateT = -1;
+    this.lamp!.object3D!.visible = true;
     this.phase = 'placing';
     this.world.camera.getWorldPosition(this.eye);
     this.world.camera.getWorldDirection(this.v1);
@@ -411,7 +506,7 @@ export class RitualSystem extends createSystem({
     const lamp = this.lamp.object3D!;
     lamp.updateWorldMatrix(true, true);
     const phase = this.phase;
-    if (phase === 'settling') return;
+    if (phase === 'settling' || phase === 'locating') return;
 
     // 1. The chain bead, in every phase but placing.
     if (phase !== 'placing' && this.hitsChain(p)) {
@@ -429,6 +524,8 @@ export class RitualSystem extends createSystem({
     // 3. The lamp itself: place it, or re-place it in one gesture.
     const lampHit = this.hitsLamp(p, phase === 'placing');
     if (lampHit) this.startHold(p, 'lamp', '', lampHit === 'far');
+    // A pinch on nothing, held, brings the lamp to the user (see update).
+    else if (this.immersive && phase !== 'placing') this.summon = { pointer: p, start: this.time };
   }
 
   private startHold(p: Pointer, kind: Hold['kind'], cardId: string, far: boolean): void {
@@ -567,6 +664,7 @@ export class RitualSystem extends createSystem({
   // ---------------------------------------------------------------- release
 
   private onPinchEnd(p: Pointer): void {
+    if (this.summon?.pointer === p) this.summon = null;
     const hold = this.holds.get(p.id);
     if (!hold) return;
     this.holds.delete(p.id);
@@ -811,6 +909,7 @@ export class RitualSystem extends createSystem({
       }
       this.faceUser(this.floating ? FLOAT_TILT_RAD : 0);
       this.dressing!.setTrayVisible(this.floating);
+      this.pinLamp();
       this.phase = resume;
       this.applyCardVisibility();
       if (resume === 'asleep' || resume === 'off') {
@@ -863,7 +962,8 @@ export class RitualSystem extends createSystem({
     const lamp = this.lamp.object3D!;
     this.pointers.update();
     this.probe.update(delta);
-    if (this.placeInFrames >= 0 && this.placeInFrames-- === 0 && this.immersive) this.beginPlacing();
+    if (this.placeInFrames >= 0 && this.placeInFrames-- === 0 && this.immersive) this.startImmersive();
+    this.updateAnchor(delta);
 
     let scrape = 0;
     let highlight: ZoneHighlight = null;
@@ -912,6 +1012,20 @@ export class RitualSystem extends createSystem({
       }
     }
     this.sound.setScrapeSpeed(scrape);
+    if (this.summon && time - this.summon.start > SUMMON_SECONDS) {
+      this.summon = null;
+      this.world.camera.getWorldPosition(this.eye);
+      lamp.getWorldPosition(this.v1);
+      const away = this.v1.distanceTo(this.eye) > 1.0;
+      // Only a lamp left elsewhere comes over, so a missed pinch at the desk
+      // never moves it.
+      if (away && this.phase !== 'placing' && this.phase !== 'settling' && this.phase !== 'locating') {
+        // The lamp comes to the user; placing it pins the new spot.
+        this.anchor.release();
+        this.beginPlacing();
+        dressing.say('Set the lamp down here', 3);
+      }
+    }
     dressing.setHighlight(highlight);
 
     // Light: on while awake, a short sweep when a session opens, gentle breath.
