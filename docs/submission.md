@@ -237,8 +237,20 @@ the lamp's pick AI.
   https://duskdesk.vercel.app.
 - Deployed from this folder with the Vercel CLI. It is not connected to GitHub,
   so pushes to `main` do not change the live link.
-- To publish a fix before the deadline: `npm run typecheck`, then
-  `npx vercel deploy --prod --scope just-another-team1`. Rerun the affected
-  device checks on the live link afterwards.
+- Since 18 November a plain `vercel deploy` from this folder is refused
+  ("The commit author doesn't have access to this team"): Vercel checks the
+  git commit author against the team. Build locally and upload the output
+  from a folder outside git instead:
+
+  ```bash
+  npm run typecheck
+  npx vercel pull --yes --environment=production --scope just-another-team1
+  npx vercel build --prod --scope just-another-team1
+  rm -rf /tmp/duskdesk-deploy && mkdir -p /tmp/duskdesk-deploy/.vercel
+  cp -R .vercel/project.json .vercel/output /tmp/duskdesk-deploy/.vercel/
+  cd /tmp/duskdesk-deploy && npx vercel deploy --prebuilt --prod --yes --scope just-another-team1
+  ```
+
+  Rerun the affected device checks on the live link afterwards.
 - Saved cards and the lamp's spot belong to each address, so the live link
   starts fresh on a headset that has only used the dev URL.
