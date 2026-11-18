@@ -36,7 +36,7 @@ import {
   slotX,
 } from './layout.js';
 import type { LampStyle, SavedCard } from './store.js';
-import { shadeProfile } from '../scene-assets/desk-lamp.scene-asset.js';
+import { LAMP_CHAIN_LENGTH, shadeProfile } from '../scene-assets/desk-lamp.scene-asset.js';
 
 type Finish = { color: number; roughness: number; metalness: number };
 /** Body (enamel), metal fittings, dark fittings and the felt pad, per style. */
@@ -107,6 +107,8 @@ export class DeskDressing {
   private readonly shadeOuter: Mesh;
   private readonly shadeInner: Mesh;
   private readonly shadeRim: Object3D;
+  private readonly chainBeads: Object3D;
+  private readonly chainPullRestY: number;
   private readonly grabRing: Mesh;
   private readonly grabMaterial = new MeshBasicMaterial({
     color: 0xffc76b,
@@ -138,6 +140,8 @@ export class DeskDressing {
     this.shadeOuter = this.require('ShadeOuter') as Mesh;
     this.shadeInner = this.require('ShadeInner') as Mesh;
     this.shadeRim = this.require('ShadeRim');
+    this.chainBeads = this.require('ChainBeads');
+    this.chainPullRestY = this.chainBead.position.y;
 
     // This instance owns its lit materials so other placements stay unlit.
     const bulb = this.require('Bulb') as Mesh;
@@ -370,6 +374,22 @@ export class DeskDressing {
   setGrabGlow(amount: number): void {
     this.grabMaterial.opacity = amount;
     this.grabRing.visible = amount > 0.01;
+  }
+
+  /**
+   * Draw the chain down by `amount` metres. The chain stays hung from the
+   * shade: its beads stretch slightly and the pull moves, so there is never a
+   * gap at the top. A small negative amount lifts it for the spring-back.
+   */
+  setChainPull(amount: number): void {
+    this.chainBeads.scale.y = 1 + amount / LAMP_CHAIN_LENGTH;
+    this.chainBead.position.y = this.chainPullRestY - amount;
+  }
+
+  /** Lamp-world centre of the chain's pull (it hangs below its origin). */
+  chainPullCentre(out: Vector3): Vector3 {
+    out.set(0, -0.013, 0);
+    return this.chainBead.localToWorld(out);
   }
 
   /** Glow on the chain's pull when a hand comes near: 0..1. */

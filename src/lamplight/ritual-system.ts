@@ -37,16 +37,18 @@ const BLANK_ID = 'blank';
 const TAP_DISTANCE = 0.012;
 const TAP_SECONDS = 0.5;
 const NEAR_MARGIN = 0.02;
-const CHAIN_NEAR = 0.045;
-const CHAIN_FAR = 0.03;
+const CHAIN_NEAR = 0.032;
+const CHAIN_FAR = 0.018;
 /** How long to wait for the device to find the saved lamp spot. */
 const LOCATE_SECONDS = 5;
 /** Pinch and hold on nothing for this long to bring the lamp to you. */
 const SUMMON_SECONDS = 1.2;
 /** Beyond this distance the lamp is "at your desk", not in front of you. */
 const FAR_LAMP = 2.0;
-/** How far the chain can be pulled down, metres. */
-const CHAIN_TRAVEL = 0.05;
+/** How far the chain can be pulled down, metres (a real switch's throw). */
+const CHAIN_TRAVEL = 0.022;
+/** A pull past this many metres switches the lamp. */
+const CHAIN_CLICK = 0.009;
 /** Cards shown in the air when the folder or bin is opened. */
 const HISTORY_SHOWN = 12;
 const HISTORY_COLS = 4;
@@ -241,7 +243,6 @@ export class RitualSystem extends createSystem({
     this.dressing.setMirrored(this.state.mirrored);
     this.dressing.setStyle(this.state.lampStyle);
     this.dressing.setTrayVisible(true);
-    this.chainRestY = this.dressing.chain.position.y;
     // Remove anything retired in a session that was quit before switch-off.
     this.state.cards = this.state.cards.filter((c) => c.zone !== 'done');
     for (const saved of this.state.cards) this.spawnCard(saved.id, saved, saved.x, saved.z);
@@ -473,7 +474,7 @@ export class RitualSystem extends createSystem({
     this.sound.chainClick();
     // The chain springs back and swings, even for a pointer-only pinch.
     this.chainSpringT = 0;
-    this.chainSpringFrom = Math.max(this.chainSpringFrom, 0.02);
+    this.chainSpringFrom = Math.max(this.chainSpringFrom, 0.012);
     if (this.phase === 'awake') this.switchOff();
     else if (this.phase === 'asleep' || this.phase === 'off') this.wake();
   }
@@ -583,18 +584,23 @@ export class RitualSystem extends createSystem({
     const phase = this.phase;
     if (phase === 'settling' || phase === 'locating') return;
 
-    // 1. The chain bead, in every phase but placing.
-    if (phase !== 'placing' && this.hitsChain(p)) {
-      this.startHold(p, 'chain', '', !p.hasTip || !this.nearChain(p));
+    // 1. The chain's pull, by a fingertip right at it.
+    if (phase !== 'placing' && this.nearChain(p)) {
+      this.startHold(p, 'chain', '', false);
       return;
     }
-    // 2. A card, while the lamp is on.
+    // 2. A card, while the lamp is on: cards win over a ray that grazes the chain.
     if (phase === 'awake') {
       const picked = this.pickCard(p);
       if (picked) {
         this.startHold(p, 'card', picked.id, picked.far);
         return;
       }
+    }
+    // 3. The chain's pull by a ray aimed squarely at it (the pointer-only route).
+    if (phase !== 'placing' && this.rayHitsChain(p)) {
+      this.startHold(p, 'chain', '', true);
+      return;
     }
     // 3. Exit, the done folder and the bin.
     const dressing = this.dressing;
@@ -741,14 +747,13 @@ export class RitualSystem extends createSystem({
 
   private nearChain(p: Pointer): boolean {
     if (!p.hasTip) return false;
-    this.dressing!.chainBead.getWorldPosition(this.v1);
+    this.dressing!.chainPullCentre(this.v1);
     return this.v1.distanceTo(p.tip) < CHAIN_NEAR;
   }
 
-  private hitsChain(p: Pointer): boolean {
-    if (this.nearChain(p)) return true;
+  private rayHitsChain(p: Pointer): boolean {
     if (!p.hasRay) return false;
-    this.dressing!.chainBead.getWorldPosition(this.v1);
+    this.dressing!.chainPullCentre(this.v1);
     return rayPointDistance(p.rayOrigin, p.rayDir, this.v1, this.v2) < CHAIN_FAR;
   }
 
@@ -782,8 +787,8 @@ export class RitualSystem extends createSystem({
       // Let go of the chain: it springs back from wherever it was pulled to.
       this.chainSpringFrom = hold.pull;
       this.chainSpringT = 0;
-      // A pull, or a simple pinch on the bead for the pointer-only route.
-      if (hold.pull > 0.015 || tap || hold.far) this.pullChain();
+      // A real pull, a quick pinch on the pull, or a quick ray pinch aimed at it.
+      if (hold.pull > CHAIN_CLICK || tap) this.pullChain();
       return;
     }
     if (hold.kind === 'exit') {
@@ -817,7 +822,6 @@ export class RitualSystem extends createSystem({
     this.save();
   }
 
-  private chainRestY = Number.NaN;
 
   private returnCard(rt: CardRuntime, hold: Hold): void {
     rt.tx = hold.startX;
@@ -1280,7 +1284,7 @@ export class RitualSystem extends createSystem({
         const pull = p.hasTip && !hold.far ? clamp(hold.chainStartY - p.tip.y, 0, CHAIN_TRAVEL) : 0;
         hold.pull = Math.max(hold.pull, pull);
         this.chainSpringT = -1;
-        dressing.chain.position.y = this.chainRestY - pull;
+        dressing.setChainPull(pull);
         dressing.chain.rotation.set(0, 0, 0);
       } else if (hold.kind === 'card') {
         const rt = this.runtimes.get(hold.cardId);
@@ -1364,21 +1368,21 @@ export class RitualSystem extends createSystem({
     if (this.chainSpringT >= 0) {
       this.chainSpringT += delta;
       const t = this.chainSpringT;
-      const k = Math.min(1, this.chainSpringFrom / 0.03);
-      dressing.chain.position.y = this.chainRestY - this.chainSpringFrom * Math.exp(-6 * t) * Math.cos(17 * t);
+      const k = Math.min(1, this.chainSpringFrom / 0.015);
+      dressing.setChainPull(Math.max(-0.003, this.chainSpringFrom * Math.exp(-6 * t) * Math.cos(17 * t)));
       dressing.chain.rotation.z = 0.22 * k * Math.exp(-2.2 * t) * Math.sin(8.5 * t);
       dressing.chain.rotation.x = 0.12 * k * Math.exp(-2.6 * t) * Math.sin(6.3 * t + 0.8);
       if (t > 2.4) {
         this.chainSpringT = -1;
         this.chainSpringFrom = 0;
-        dressing.chain.position.y = this.chainRestY;
+        dressing.setChainPull(0);
         dressing.chain.rotation.set(0, 0, 0);
       }
     }
     let glow = 0;
     for (const hold of this.holds.values()) if (hold.kind === 'chain') glow = 1;
     if (glow === 0 && this.phase !== 'placing' && this.phase !== 'locating') {
-      dressing.chainBead.getWorldPosition(this.v1);
+      dressing.chainPullCentre(this.v1);
       for (const p of [this.pointers.left, this.pointers.right]) {
         if (!p.hasTip) continue;
         glow = Math.max(glow, 1 - smoothstep(0.03, 0.1, p.tip.distanceTo(this.v1)));
