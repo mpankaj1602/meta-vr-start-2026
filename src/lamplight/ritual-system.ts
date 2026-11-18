@@ -1222,7 +1222,8 @@ export class RitualSystem extends createSystem({
           this.v3.y -= 0.03;
           this.dressing!.ghost.show(this.v2, this.v3);
         }
-        this.dressing!.say(this.floating ? 'No desk found. Tray instead.' : 'Pull the chain', 4);
+        // Whether or not a desk was found, the next step is the same: say nothing about it.
+        this.dressing!.say('Pull the chain', 4);
       }
     });
   }
