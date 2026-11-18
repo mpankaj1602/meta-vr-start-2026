@@ -1,4 +1,4 @@
-# Meta VR Start 2026
+# Duskdesk
 
 Entry for the Meta VR Start Developer Competition 2026, built with Meta's
 Immersive Web SDK (IWSDK) on Three.js, TypeScript and Vite.
@@ -28,13 +28,24 @@ Quest Browser on the same Wi-Fi and accept the local certificate warning.
 
 ## What it is
 
-Lamplight (working title) is an end-of-day ritual in passthrough: slide a desk
+Duskdesk is an end-of-day ritual in passthrough: slide a desk
 lamp onto your real desk, pull its chain, slide three cards under the light for
 tomorrow and pull the chain to switch off. The concept is defined in
 `docs/lamplight-concept.md`.
 
 This is the hand-first version: silent, hands-only and offline. Voice is not
 built yet.
+
+The flat page opens on a centred card: tomorrow's three, how many cards are
+waiting later, done and let go, a lamp style picker (Classic, Modern, Studio)
+and **Go to desk**, which starts the passthrough session. In the headset an
+**Exit** button sits beside the lamp.
+
+On the desk, a card slid onto the folder is stamped and slips inside; a card
+slid off the desk (or onto the bin) crumples and is thrown into the bin. Pinch
+the folder or the bin and its recent cards rise into the air, readable. The
+pull chain springs back and swings, and a ring at the base edge glows where
+the lamp can be held to move it.
 
 The lamp stays where you set it: place it once (say on the loft desk) and the
 next session opens with it there, cards and all. If you start somewhere else,
@@ -59,7 +70,8 @@ for the competition's hands-first, seated brief:
 
 - `src/index.ts`: creates the world and registers the ritual system
 - `src/assets.ts`, `src/components.ts`: asset and component manifests
-- `src/scene-assets/desk-lamp.scene-asset.ts`: the procedural lamp
+- `src/scene-assets/desk-lamp.scene-asset.ts`: the procedural lamp and the
+  shade outline for each style
 - `src/lamplight/`: the ritual
   - `ritual-system.ts`: phases (placing, asleep, awake, off), picking, sliding,
     sorting, writing, the lamp's proposal and saving
@@ -70,12 +82,17 @@ for the competition's hands-first, seated brief:
     tray as fallback
   - `anchor.ts`: a WebXR persistent anchor that keeps the lamp at its spot in
     the room between sessions
-  - `store.ts`, `rules.ts`: saved state and the lamp's local rules
-  - `card-visual.ts`, `desk-dressing.ts`, `visuals.ts`: cards, light, slots,
-    captions, the "tomorrow" preview, room dimming and the ghost demonstration
+  - `store.ts`, `rules.ts`: saved state (cards, done and let-go history, lamp
+    style) and the lamp's local rules
+  - `card-visual.ts`, `desk-dressing.ts`, `visuals.ts`: cards (including the
+    crumple and paper ball), light, slots, the folder, bin, exit button and grab
+    ring, lamp styles, captions, the "tomorrow" preview, room dimming and the
+    ghost demonstration
   - `sound.ts`: synthesised paper scrape, knock, stamp and chain click
-  - `page.ts`: the flat page around the canvas and the hidden text field that
-    raises the system keyboard
+  - `page.ts`: the flat page (the centred card with Go to desk, the summary and
+    the style picker) and the hidden text field that raises the system keyboard
 - `public/scenes/main.iwsdk.scene.json`: places the lamp and sets lighting
 
-"Start over" on the flat page clears saved state.
+"Start over" on the flat page clears saved state after a confirmation. The
+live entry is at https://duskdesk.vercel.app (Vercel, deployed from this folder
+with the Vercel CLI; see `docs/submission.md`).
