@@ -25,6 +25,16 @@ export const TRAY_Z = 0.088;
 export const TRAY_WIDTH = 0.082;
 export const TRAY_DEPTH = 0.07;
 
+/** The bin for let-go cards sits behind the lamp on the done side. */
+export const BIN_X = 0.13;
+export const BIN_Z = -0.035;
+export const BIN_RADIUS = 0.032;
+export const BIN_HEIGHT = 0.058;
+
+/** The exit button sits behind the lamp on the other side. */
+export const EXIT_X = 0.1;
+export const EXIT_Z = -0.025;
+
 /** Row where loose cards fan out, nearest the user. */
 export const FAN_Z = 0.165;
 
@@ -46,6 +56,14 @@ export function doneX(mirrored: boolean): number {
   return mirrored ? -TRAY_X : TRAY_X;
 }
 
+export function binX(mirrored: boolean): number {
+  return mirrored ? -BIN_X : BIN_X;
+}
+
+export function exitX(mirrored: boolean): number {
+  return mirrored ? EXIT_X : -EXIT_X;
+}
+
 export type DropTarget =
   | { kind: 'slot'; index: number }
   | { kind: 'later' }
@@ -58,6 +76,9 @@ export function classifyDrop(x: number, z: number, mirrored: boolean): DropTarge
   const dx = x - POOL_X;
   const dz = z - POOL_Z;
   if (dx * dx + dz * dz > LET_GO_RADIUS * LET_GO_RADIUS) {
+    return { kind: 'letGo' };
+  }
+  if (Math.hypot(x - binX(mirrored), z - BIN_Z) < BIN_RADIUS + 0.012) {
     return { kind: 'letGo' };
   }
   for (let i = 0; i < SLOT_COUNT; i += 1) {

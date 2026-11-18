@@ -1,6 +1,7 @@
 import {
   CanvasTexture,
   Group,
+  IcosahedronGeometry,
   Mesh,
   MeshBasicMaterial,
   MeshStandardMaterial,
@@ -14,6 +15,28 @@ const TEX_H = Math.round((TEX_W * CARD_DEPTH) / CARD_WIDTH);
 const PAPER = '#f7f0e1';
 const INK = '#1b1813';
 const FONT = '"Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif';
+
+/** One shared, deterministic crumpled-paper ball for every tossed card. */
+let ballGeometry: IcosahedronGeometry | null = null;
+let ballMaterial: MeshStandardMaterial | null = null;
+function paperBall(): { geometry: IcosahedronGeometry; material: MeshStandardMaterial } {
+  if (!ballGeometry || !ballMaterial) {
+    ballGeometry = new IcosahedronGeometry(0.0135, 1);
+    const pos = ballGeometry.attributes.position!;
+    for (let i = 0; i < pos.count; i += 1) {
+      // Fixed pseudo-random dents so every ball looks crumpled, not round.
+      const k = 0.78 + 0.34 * fract(Math.sin(i * 12.9898 + 78.233) * 43758.5453);
+      pos.setXYZ(i, pos.getX(i) * k, pos.getY(i) * k, pos.getZ(i) * k);
+    }
+    ballGeometry.computeVertexNormals();
+    ballMaterial = new MeshStandardMaterial({ color: 0xefe6d2, roughness: 0.95, flatShading: true });
+  }
+  return { geometry: ballGeometry, material: ballMaterial };
+}
+
+function fract(v: number): number {
+  return v - Math.floor(v);
+}
 
 export type CardFace =
   | { kind: 'text'; text: string; done: boolean; own: boolean }
@@ -33,6 +56,9 @@ export class CardVisual {
   private readonly glowMaterial: MeshBasicMaterial;
   private readonly faceMaterial: MeshStandardMaterial;
   private curl = 0;
+  private crumpled = 0;
+  private readonly basePositions: Float32Array;
+  private ball: Mesh | null = null;
 
   constructor(name: string) {
     this.root.name = name;
@@ -56,6 +82,7 @@ export class CardVisual {
     this.face.name = `${name}Face`;
     this.face.rotation.x = -Math.PI / 2;
     this.face.position.y = 0.0015;
+    this.basePositions = new Float32Array(this.face.geometry.attributes.position!.array);
 
     // A warm rim drawn just under the card: shown when held, hovered or pointed at.
     this.glowMaterial = new MeshBasicMaterial({
@@ -101,6 +128,49 @@ export class CardVisual {
     }
     pos.needsUpdate = true;
     this.face.geometry.computeVertexNormals();
+  }
+
+  /** Scrunch the card toward its centre with creases: 0 flat, 1 a tight wad. */
+  crumple(amount: number): void {
+    if (amount === this.crumpled) return;
+    this.crumpled = amount;
+    const pos = this.face.geometry.attributes.position!;
+    const shrink = 1 - 0.78 * amount;
+    for (let i = 0; i < pos.count; i += 1) {
+      const n1 = fract(Math.sin(i * 91.7 + 3.1) * 43758.5453) - 0.5;
+      const n2 = fract(Math.sin(i * 37.3 + 9.7) * 24634.6345) - 0.5;
+      pos.setXYZ(
+        i,
+        this.basePositions[i * 3]! * shrink + n1 * 0.01 * amount,
+        this.basePositions[i * 3 + 1]! * shrink + n2 * 0.008 * amount,
+        (n1 + n2) * 0.016 * amount,
+      );
+    }
+    pos.needsUpdate = true;
+    this.face.geometry.computeVertexNormals();
+  }
+
+  /** Show the crumpled ball at this scale (0 hides it). */
+  setBall(scale: number): void {
+    if (scale <= 0.001) {
+      if (this.ball) this.ball.visible = false;
+      return;
+    }
+    if (!this.ball) {
+      const { geometry, material } = paperBall();
+      this.ball = new Mesh(geometry, material);
+      this.ball.name = `${this.root.name}Ball`;
+      this.ball.position.y = 0.012;
+      this.root.add(this.ball);
+    }
+    this.ball.visible = true;
+    this.ball.scale.setScalar(scale);
+    this.ball.rotation.set(scale * 2.1, scale * 3.4, 0);
+  }
+
+  /** Stand the card upright, face toward +Z, for viewing in the air. */
+  standUp(): void {
+    this.root.rotation.x = Math.PI / 2;
   }
 
   draw(face: CardFace): void {
@@ -185,6 +255,9 @@ export class CardVisual {
   }
 
   dispose(): void {
+    // The ball's geometry and material are shared by every card: never dispose them.
+    if (this.ball) this.root.remove(this.ball);
+    this.ball = null;
     this.texture.dispose();
     this.faceMaterial.dispose();
     this.glowMaterial.dispose();

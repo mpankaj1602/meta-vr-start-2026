@@ -20,6 +20,27 @@ export interface SavedCard {
   bornSession: number;
 }
 
+/** What happened to a card that left the desk. */
+export type HistoryOutcome = 'done' | 'letGo';
+
+export interface HistoryEntry {
+  id: string;
+  text: string;
+  own: boolean;
+  outcome: HistoryOutcome;
+  /** Session number in which it left the desk. */
+  session: number;
+  /** Epoch milliseconds. */
+  at: number;
+}
+
+/** The lamp's look; every style lights and behaves the same. */
+export type LampStyle = 'classic' | 'modern' | 'studio';
+export const LAMP_STYLES: readonly LampStyle[] = ['classic', 'modern', 'studio'];
+
+/** The folder and the bin keep this many of their most recent cards. */
+export const HISTORY_LIMIT = 48;
+
 export interface SavedState {
   version: 1;
   /** Completed sessions (switch-offs). 0 means the first run is not done. */
@@ -30,12 +51,15 @@ export interface SavedState {
   /** True when the lamp was left on a floating tray rather than a surface. */
   floating: boolean;
   cards: SavedCard[];
+  /** Cards filed in the done folder or thrown in the bin, oldest first. */
+  history: HistoryEntry[];
+  lampStyle: LampStyle;
 }
 
 const KEY = 'lamplight.state.v1';
 
 export function emptyState(): SavedState {
-  return { version: 1, sessions: 0, mirrored: false, anchorId: null, floating: false, cards: [] };
+  return { version: 1, sessions: 0, mirrored: false, anchorId: null, floating: false, cards: [], history: [], lampStyle: 'classic' };
 }
 
 export function loadState(): SavedState {
@@ -51,6 +75,8 @@ export function loadState(): SavedState {
       anchorId: typeof parsed.anchorId === 'string' ? parsed.anchorId : null,
       floating: Boolean(parsed.floating),
       cards: parsed.cards.filter(isSavedCard),
+      history: Array.isArray(parsed.history) ? parsed.history.filter(isHistoryEntry).slice(-HISTORY_LIMIT) : [],
+      lampStyle: LAMP_STYLES.includes(parsed.lampStyle as LampStyle) ? (parsed.lampStyle as LampStyle) : 'classic',
     };
   } catch {
     return emptyState();
@@ -83,6 +109,39 @@ function isSavedCard(value: unknown): value is SavedCard {
     typeof c.x === 'number' &&
     typeof c.z === 'number'
   );
+}
+
+function isHistoryEntry(value: unknown): value is HistoryEntry {
+  const h = value as HistoryEntry;
+  return (
+    typeof h === 'object' &&
+    h !== null &&
+    typeof h.id === 'string' &&
+    typeof h.text === 'string' &&
+    (h.outcome === 'done' || h.outcome === 'letGo')
+  );
+}
+
+/** Record a card leaving the desk, keeping the most recent HISTORY_LIMIT. */
+export function addHistory(state: SavedState, card: SavedCard, outcome: HistoryOutcome): void {
+  state.history.push({
+    id: card.id,
+    text: card.text,
+    own: card.own,
+    outcome,
+    session: state.sessions,
+    at: Date.now(),
+  });
+  if (state.history.length > HISTORY_LIMIT) state.history.splice(0, state.history.length - HISTORY_LIMIT);
+}
+
+/** Most recent first. */
+export function historyOf(state: SavedState, outcome: HistoryOutcome, limit: number): HistoryEntry[] {
+  const out: HistoryEntry[] = [];
+  for (let i = state.history.length - 1; i >= 0 && out.length < limit; i -= 1) {
+    if (state.history[i]!.outcome === outcome) out.push(state.history[i]!);
+  }
+  return out;
 }
 
 let counter = 0;
