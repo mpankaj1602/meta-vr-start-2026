@@ -8,7 +8,6 @@ import type { ZoneHighlight } from './desk-dressing.js';
 import {
   CARD_DEPTH,
   CARD_WIDTH,
-  FLOAT_TILT_RAD,
   POOL_RADIUS,
   POOL_X,
   POOL_Z,
@@ -319,6 +318,9 @@ export class RitualSystem extends createSystem({
     if (!this.anchor.tracking || this.phase === 'settling' || this.holdsLamp()) return;
     const lamp = this.lamp!.object3D!;
     if (!this.anchor.readPose(lamp)) return;
+    // Keep the lamp upright even if an older spot was saved tilted: yaw only.
+    lamp.rotation.setFromQuaternion(lamp.quaternion, 'YXZ');
+    lamp.rotation.set(0, lamp.rotation.y, 0, 'YXZ');
     if (this.phase === 'locating' || this.phase === 'placing') {
       this.phase = this.afterPlacing;
       this.locateT = -1;
@@ -1204,7 +1206,8 @@ export class RitualSystem extends createSystem({
       } else {
         this.floating = true;
       }
-      this.faceUser(this.floating ? FLOAT_TILT_RAD : 0);
+      // Always level: a tilted tray sinks into a real desk the probe missed.
+      this.faceUser(0);
       this.dressing!.setTrayVisible(this.floating);
       this.pinLamp();
       this.phase = resume;
