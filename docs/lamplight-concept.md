@@ -231,7 +231,7 @@ fail, build Lamplight without section 4.
 - How many starter cards, and which.
 - Exact lamp styling.
 - The final name. An Android journal app and a Steam game already use
-  "Lamplight"; settle it before the video, link and privacy page are made.
+  "Lamplight". Decided 17 November: **Duskdesk** (see `docs/submission.md`).
 
 ## 13. Known risks
 
