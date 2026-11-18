@@ -264,8 +264,9 @@ export class RitualSystem extends createSystem({
       this.placeInFrames = 3;
     } else {
       this.pointers.detachSession();
-      this.probe.cancel();
-      this.anchor.release();
+      // The session has ended: drop XR objects without calling into them.
+      this.probe.cancel(false);
+      this.anchor.forget();
       this.locateT = -1;
       this.summon = null;
       this.pinNextFrame = false;
@@ -786,9 +787,7 @@ export class RitualSystem extends createSystem({
       return;
     }
     if (hold.kind === 'exit') {
-      this.dressing!.setExitPressed(false);
-      this.closeHistory();
-      this.world.exitXR();
+      this.exitSession();
       return;
     }
     if (hold.kind === 'folder' || hold.kind === 'bin') {
@@ -940,6 +939,19 @@ export class RitualSystem extends createSystem({
   }
 
   // ---------------------------------------------------------------- history
+
+  /**
+   * Leave the headset session from the Exit button. Tidy up while the session
+   * is still live, then end it outside this input event, never inside it.
+   */
+  private exitSession(): void {
+    this.dressing!.setExitPressed(false);
+    this.closeHistory();
+    this.save();
+    this.probe.cancel();
+    this.anchor.release();
+    window.setTimeout(() => this.world.exitXR(), 0);
+  }
 
   /** Pinch the folder or the bin: its recent cards rise into the air, readable. */
   private toggleHistory(kind: HistoryOutcome): void {

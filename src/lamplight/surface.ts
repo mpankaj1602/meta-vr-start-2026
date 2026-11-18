@@ -89,9 +89,16 @@ export class SurfaceProbe {
     if (this.elapsed > this.timeout) this.finish({ found: false });
   }
 
-  cancel(): void {
+  /** Stop probing. Pass `sessionAlive = false` after the session ended: then nothing calls into WebXR. */
+  cancel(sessionAlive = true): void {
     this.requested = false;
-    this.source?.cancel();
+    if (sessionAlive) {
+      try {
+        this.source?.cancel();
+      } catch {
+        // Already gone with its session.
+      }
+    }
     this.source = null;
     this.resolve = null;
   }

@@ -101,9 +101,21 @@ export class LampAnchor {
     }
   }
 
-  /** Stop following the anchor (it stays saved on the device). */
+  /** Stop following the anchor (it stays saved on the device). Session must be live. */
   release(): void {
-    this.anchor?.delete();
+    try {
+      this.anchor?.delete();
+    } catch {
+      // The session may already be gone; dropping the reference is enough.
+    }
+    this.anchor = null;
+  }
+
+  /**
+   * Drop the anchor without calling into WebXR. Use after the session has
+   * ended: touching XR objects of an ended session can crash the browser.
+   */
+  forget(): void {
     this.anchor = null;
   }
 }
