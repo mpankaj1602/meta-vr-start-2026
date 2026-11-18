@@ -43,7 +43,11 @@ export class PageOverlay {
         background: rgba(12,11,10,0.94); border: 2px solid #fffaf0; border-radius: 22px;
         font-size: 18px; line-height: 1.4; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
       .ll-panel h1 { font-size: 34px; margin: 0 0 6px; letter-spacing: 0.01em; }
-      .ll-tag { margin: 0 0 18px; opacity: 0.9; }
+      .ll-tag { margin: 0 0 10px; font-size: 19px; font-weight: 700; }
+      .ll-about { margin: 0 0 18px; font-size: 16px; opacity: 0.88; }
+      .ll-steps { text-align: left; margin: 0 0 10px; padding-left: 26px; font-size: 17px; }
+      .ll-steps li { margin: 4px 0; }
+      .ll-small { font-size: 14px; opacity: 0.75; margin: 0 0 4px; text-align: center; }
       .ll-summary { text-align: left; margin: 0 auto 20px; max-width: 320px; }
       .ll-summary h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.12em; margin: 0 0 8px; opacity: 0.85; }
       .ll-summary ol { margin: 0 0 12px; padding-left: 26px; font-size: 19px; }
@@ -76,7 +80,9 @@ export class PageOverlay {
     this.panel.setAttribute('aria-label', 'Duskdesk');
     this.panel.innerHTML = `
       <h1>Duskdesk</h1>
-      <p class="ll-tag">Put tomorrow on your desk. Pick three. Switch off.</p>
+      <p class="ll-tag">An end-of-day planner for your real desk.</p>
+      <p class="ll-about">Get what’s on your mind onto cards. Slide three under the lamp for tomorrow,
+        file what’s done, toss what can go. Pull the chain and the day is put away.</p>
       <section class="ll-summary" data-summary></section>
       <fieldset class="ll-style" data-style><legend>Lamp</legend></fieldset>
       <button type="button" class="ll-go" data-go>Go to desk</button>
@@ -144,8 +150,8 @@ export class PageOverlay {
   setXRSupported(supported: boolean): void {
     this.xrSupported = supported;
     this.note.textContent = supported
-      ? 'Opens your desk in passthrough. Hands only, seated.'
-      : 'No headset here: use the mouse on the desk.';
+      ? 'Sit at a desk or table. The lamp goes right on it.'
+      : 'Open this page in your Meta Quest browser to use your real desk. Here, try it with the mouse.';
   }
 
   setImmersive(immersive: boolean): void {
@@ -163,10 +169,23 @@ export class PageOverlay {
   showSummary(s: PageSummary): void {
     this.summary.replaceChildren();
     if (s.firstRun && s.tomorrow.length === 0) {
-      const p = document.createElement('p');
-      p.className = 'll-first';
-      p.textContent = 'About three minutes at your real desk. Seated, hands only, offline.';
-      this.summary.appendChild(p);
+      const h2 = document.createElement('h2');
+      h2.textContent = 'How it works';
+      const ol = document.createElement('ol');
+      ol.className = 'll-steps';
+      for (const step of [
+        'Set the lamp on your desk and pull its chain.',
+        'Write cards. Slide three under the light.',
+        'Pull the chain again. Tomorrow is set.',
+      ]) {
+        const li = document.createElement('li');
+        li.textContent = step;
+        ol.appendChild(li);
+      }
+      const small = document.createElement('p');
+      small.className = 'll-small';
+      small.textContent = 'About three minutes. Your cards stay on this device.';
+      this.summary.append(h2, ol, small);
       return;
     }
     const h2 = document.createElement('h2');
@@ -189,7 +208,7 @@ export class PageOverlay {
       li.textContent = `${n} ${label}`;
       counts.appendChild(li);
     };
-    add(s.later, 'later');
+    add(s.later, 'waiting later');
     add(s.done, 'done');
     add(s.letGo, 'let go');
     this.summary.appendChild(counts);
