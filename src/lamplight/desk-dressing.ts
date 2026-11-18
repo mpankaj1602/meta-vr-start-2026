@@ -1,16 +1,27 @@
 import {
   BoxGeometry,
   CylinderGeometry,
+  DoubleSide,
   Group,
+  LatheGeometry,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   Object3D,
   SpotLight,
+  TorusGeometry,
+  Vector2,
   Vector3,
 } from '@iwsdk/core';
 import type { Entity, World } from '@iwsdk/core';
 import {
+  BIN_HEIGHT,
+  BIN_RADIUS,
+  BIN_Z,
   CARD_DEPTH,
+  EXIT_Z,
+  binX,
+  exitX,
   CARD_WIDTH,
   POOL_RADIUS,
   POOL_X,
@@ -24,7 +35,32 @@ import {
   laterX,
   slotX,
 } from './layout.js';
-import type { SavedCard } from './store.js';
+import type { LampStyle, SavedCard } from './store.js';
+import { shadeProfile } from '../scene-assets/desk-lamp.scene-asset.js';
+
+type Finish = { color: number; roughness: number; metalness: number };
+/** Body (enamel), metal fittings, dark fittings and the felt pad, per style. */
+const STYLE_FINISH: Record<LampStyle, { body: Finish; metal: Finish; dark: Finish; felt: Finish }> = {
+  classic: {
+    body: { color: 0x24352f, roughness: 0.38, metalness: 0.2 },
+    metal: { color: 0xb89252, roughness: 0.28, metalness: 0.88 },
+    dark: { color: 0x6e5630, roughness: 0.5, metalness: 0.8 },
+    felt: { color: 0x1c2a22, roughness: 1, metalness: 0 },
+  },
+  modern: {
+    body: { color: 0xe8e2d6, roughness: 0.62, metalness: 0 },
+    metal: { color: 0x1e1e20, roughness: 0.42, metalness: 0.35 },
+    dark: { color: 0x3a3a3d, roughness: 0.5, metalness: 0.3 },
+    felt: { color: 0x2a2a2a, roughness: 1, metalness: 0 },
+  },
+  studio: {
+    body: { color: 0x9da3a8, roughness: 0.33, metalness: 0.85 },
+    metal: { color: 0xb8743a, roughness: 0.3, metalness: 0.9 },
+    dark: { color: 0x1f1f21, roughness: 0.45, metalness: 0.5 },
+    felt: { color: 0x202020, roughness: 1, metalness: 0 },
+  },
+};
+type Role = 'body' | 'metal' | 'dark' | 'felt';
 import { FONT, GhostPinch, RoomDimmer, TextPlane, createLightPool, drawPill, roundRect } from './visuals.js';
 import { wordCount } from './rules.js';
 
@@ -56,6 +92,29 @@ export class DeskDressing {
   private readonly preview: TextPlane;
   private readonly tray: Mesh;
   private readonly stamp: Group;
+  private readonly folder: Group;
+  private readonly folderFlap: Object3D;
+  private readonly bin: Group;
+  private readonly exitPlane: TextPlane;
+  private readonly historyTitle: TextPlane;
+  private readonly beadMaterial: MeshStandardMaterial;
+  private folderOpen = 0;
+  private folderOpenTarget = 0;
+  private binKickT = -1;
+  private stampLandY = 0.0015;
+  private readonly roleMeshes: Record<Role, Mesh[]> = { body: [], metal: [], dark: [], felt: [] };
+  private readonly styleMaterials = new Map<string, MeshStandardMaterial>();
+  private readonly shadeOuter: Mesh;
+  private readonly shadeInner: Mesh;
+  private readonly shadeRim: Object3D;
+  private readonly grabRing: Mesh;
+  private readonly grabMaterial = new MeshBasicMaterial({
+    color: 0xffc76b,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    toneMapped: false,
+  });
   private readonly entities: Entity[] = [];
   private highlight: ZoneHighlight = null;
   private captionTimer = 0;
@@ -68,10 +127,27 @@ export class DeskDressing {
     this.chain = this.require('Chain');
     this.chainBead = this.require('ChainBead');
 
+    // Sort the lamp's parts by finish before any material is cloned below.
+    const roleOf: Record<string, Role> = { LampEnamel: 'body', LampBrass: 'metal', LampDarkBrass: 'dark', LampFelt: 'felt' };
+    this.lampObject.traverse((o) => {
+      const mesh = o as Mesh;
+      if (!mesh.isMesh || mesh.name === 'ChainBead') return;
+      const role = roleOf[(mesh.material as MeshStandardMaterial).name];
+      if (role) this.roleMeshes[role].push(mesh);
+    });
+    this.shadeOuter = this.require('ShadeOuter') as Mesh;
+    this.shadeInner = this.require('ShadeInner') as Mesh;
+    this.shadeRim = this.require('ShadeRim');
+
     // This instance owns its lit materials so other placements stay unlit.
     const bulb = this.require('Bulb') as Mesh;
     this.bulbMaterial = (bulb.material as MeshStandardMaterial).clone();
     bulb.material = this.bulbMaterial;
+    const bead = this.chainBead as Mesh;
+    this.beadMaterial = (bead.material as MeshStandardMaterial).clone();
+    this.beadMaterial.emissive.setHex(0xffc76b);
+    this.beadMaterial.emissiveIntensity = 0;
+    bead.material = this.beadMaterial;
     const inner = this.require('ShadeInner') as Mesh;
     this.innerMaterial = (inner.material as MeshStandardMaterial).clone();
     inner.material = this.innerMaterial;
@@ -126,6 +202,30 @@ export class DeskDressing {
 
     this.stamp = this.buildStamp();
     add(this.stamp);
+    this.folder = this.buildFolder();
+    this.folderFlap = this.folder.getObjectByName('FolderFlap')!;
+    add(this.folder);
+    this.bin = this.buildBin();
+    add(this.bin);
+
+    // A warm ring around the base edge: "hold the lamp here", like a window's grab bar.
+    this.grabRing = new Mesh(new TorusGeometry(0.063, 0.0022, 8, 64), this.grabMaterial);
+    this.grabRing.name = 'GrabRing';
+    this.grabRing.rotation.x = Math.PI / 2;
+    this.grabRing.position.y = 0.007;
+    this.grabRing.visible = false;
+    add(this.grabRing);
+
+    this.exitPlane = new TextPlane('ExitButton', 0.075, 0.03, 4000);
+    this.exitPlane.mesh.rotation.x = -0.9;
+    this.exitPlane.mesh.renderOrder = 30;
+    this.drawExit(false);
+    add(this.exitPlane.mesh);
+
+    this.historyTitle = new TextPlane('HistoryTitle', 0.26, 0.034, 4000);
+    this.historyTitle.mesh.renderOrder = 30;
+    this.historyTitle.mesh.visible = false;
+    add(this.historyTitle.mesh);
     add(this.ghost.root);
     add(this.dimmer.mesh, undefined);
 
@@ -157,9 +257,160 @@ export class DeskDressing {
     return stamp;
   }
 
+  /** A manila folder lying flat, open toward the user; done cards slip in. */
+  private buildFolder(): Group {
+    const folder = new Group();
+    folder.name = 'DoneFolder';
+    const manila = new MeshStandardMaterial({ color: 0xcfa45f, roughness: 0.85 });
+    const flapMaterial = new MeshStandardMaterial({ color: 0xdcb77a, roughness: 0.85 });
+    const back = new Mesh(new BoxGeometry(0.078, 0.0016, 0.058), manila);
+    back.position.y = 0.0008;
+    const tab = new Mesh(new BoxGeometry(0.026, 0.0016, 0.01), manila);
+    tab.position.set(-0.02, 0.0008, -0.033);
+    const flap = new Group();
+    flap.name = 'FolderFlap';
+    flap.position.set(0, 0.0018, -0.029);
+    const cover = new Mesh(new BoxGeometry(0.078, 0.0014, 0.052), flapMaterial);
+    cover.position.z = 0.026;
+    flap.add(cover);
+    folder.add(back, tab, flap);
+    folder.visible = false;
+    return folder;
+  }
+
+  /** A small open waste bin for let-go cards. */
+  private buildBin(): Group {
+    const bin = new Group();
+    bin.name = 'Bin';
+    const metal = new MeshStandardMaterial({
+      color: 0x34363a,
+      roughness: 0.5,
+      metalness: 0.55,
+      side: DoubleSide,
+    });
+    const r = BIN_RADIUS;
+    const body = new Mesh(
+      new LatheGeometry(
+        [
+          new Vector2(0, 0.002),
+          new Vector2(r * 0.74, 0.002),
+          new Vector2(r * 0.76, 0),
+          new Vector2(r, BIN_HEIGHT),
+        ],
+        40,
+      ),
+      metal,
+    );
+    const rim = new Mesh(new TorusGeometry(r, 0.0019, 8, 40), metal);
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = BIN_HEIGHT;
+    const band = new Mesh(new TorusGeometry(r * 0.83, 0.0012, 6, 40), metal);
+    band.rotation.x = Math.PI / 2;
+    band.position.y = BIN_HEIGHT * 0.3;
+    bin.add(body, rim, band);
+    bin.visible = false;
+    return bin;
+  }
+
+  private drawExit(pressed: boolean): void {
+    const { ctx, width, height } = this.exitPlane;
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = pressed ? '#fff4dc' : 'rgba(12,11,10,0.9)';
+    roundRect(ctx, 6, 6, width - 12, height - 12, (height - 12) / 2);
+    ctx.fill();
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = '#fff4dc';
+    ctx.stroke();
+    ctx.fillStyle = pressed ? '#15130f' : '#fff4dc';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `800 ${Math.round(height * 0.5)}px ${FONT}`;
+    ctx.fillText('Exit', width / 2, height / 2 + 3);
+    this.exitPlane.commit();
+  }
+
+  setExitPressed(pressed: boolean): void {
+    this.drawExit(pressed);
+  }
+
+  setExitVisible(visible: boolean): void {
+    this.exitPlane.mesh.visible = visible;
+  }
+
+  /** Folder and bin appear once the side trays are in play. */
+  setSidesVisible(visible: boolean): void {
+    this.folder.visible = visible;
+    this.bin.visible = visible;
+  }
+
+  /** Open the folder's flap a little more, e.g. while a card hovers over it. */
+  setFolderOpen(open: boolean): void {
+    this.folderOpenTarget = open ? 1 : 0;
+  }
+
+  /** A small hop of the bin when a ball lands in it. */
+  kickBin(): void {
+    this.binKickT = 0;
+  }
+
+  /** World-free lamp-local centres of the folder and bin, for picking and animation. */
+  folderCentre(out: Vector3): Vector3 {
+    return out.copy(this.folder.position);
+  }
+
+  binCentre(out: Vector3): Vector3 {
+    return out.copy(this.bin.position);
+  }
+
+  exitCentre(out: Vector3): Vector3 {
+    return out.copy(this.exitPlane.mesh.position);
+  }
+
+  /** Show the base's grab ring: 0 hidden, 1 fully lit (while held). */
+  setGrabGlow(amount: number): void {
+    this.grabMaterial.opacity = amount;
+    this.grabRing.visible = amount > 0.01;
+  }
+
+  /** Glow on the chain's pull when a hand comes near: 0..1. */
+  setChainGlow(amount: number): void {
+    this.beadMaterial.emissiveIntensity = 0.9 * amount;
+  }
+
+  showHistoryTitle(text: string, x: number, y: number, z: number): void {
+    drawPill(this.historyTitle, text);
+    this.historyTitle.mesh.position.set(x, y, z);
+    this.historyTitle.mesh.visible = text.length > 0;
+  }
+
+  /** Restyle this lamp: finishes and shade outline. Light and behaviour are unchanged. */
+  setStyle(style: LampStyle): void {
+    const finish = STYLE_FINISH[style];
+    for (const role of ['body', 'metal', 'dark', 'felt'] as const) {
+      const key = `${style}:${role}`;
+      let material = this.styleMaterials.get(key);
+      if (!material) {
+        const f = finish[role];
+        material = new MeshStandardMaterial({ name: `Lamp_${key}`, color: f.color, roughness: f.roughness, metalness: f.metalness });
+        this.styleMaterials.set(key, material);
+      }
+      for (const mesh of this.roleMeshes[role]) mesh.material = material;
+    }
+    this.beadMaterial.color.setHex(finish.metal.color);
+    this.beadMaterial.roughness = finish.metal.roughness;
+    this.beadMaterial.metalness = finish.metal.metalness;
+    const profile = shadeProfile(style);
+    this.shadeOuter.geometry = profile.outer;
+    this.shadeInner.geometry = profile.inner;
+    this.shadeRim.scale.setScalar(profile.rimRadius / 0.0512);
+  }
+
   setMirrored(mirrored: boolean): void {
     this.laterPlane.mesh.position.set(laterX(mirrored), 0.0006, TRAY_Z);
     this.donePlane.mesh.position.set(doneX(mirrored), 0.0006, TRAY_Z);
+    this.folder.position.set(doneX(mirrored), 0.0007, TRAY_Z - 0.003);
+    this.bin.position.set(binX(mirrored), 0, BIN_Z);
+    this.exitPlane.mesh.position.set(exitX(mirrored), 0.016, EXIT_Z);
   }
 
   /** Where the done pad and later tray sit, for snapping cards. */
@@ -228,7 +479,8 @@ export class DeskDressing {
       plane.commit();
     });
     this.drawTray(this.laterPlane, 'later', '↻', this.highlight?.kind === 'later');
-    this.drawTray(this.donePlane, 'done', '✓', this.highlight?.kind === 'done');
+    this.drawTray(this.donePlane, 'done', '', this.highlight?.kind === 'done');
+    this.setFolderOpen(this.highlight?.kind === 'done');
   }
 
   private drawTray(plane: TextPlane, label: string, glyph: string, on: boolean): void {
@@ -243,10 +495,16 @@ export class DeskDressing {
     ctx.fillStyle = '#fff4dc';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.font = `800 ${Math.round(height * 0.3)}px ${FONT}`;
-    ctx.fillText(glyph, width / 2, height * 0.36);
-    ctx.font = `700 ${Math.round(height * 0.22)}px ${FONT}`;
-    ctx.fillText(label, width / 2, height * 0.72);
+    if (glyph) {
+      ctx.font = `800 ${Math.round(height * 0.3)}px ${FONT}`;
+      ctx.fillText(glyph, width / 2, height * 0.36);
+      ctx.font = `700 ${Math.round(height * 0.22)}px ${FONT}`;
+      ctx.fillText(label, width / 2, height * 0.72);
+    } else {
+      // The folder covers the middle; the label sits along the near edge.
+      ctx.font = `700 ${Math.round(height * 0.17)}px ${FONT}`;
+      ctx.fillText(label, width / 2, height * 0.92);
+    }
     plane.commit();
   }
 
@@ -296,7 +554,8 @@ export class DeskDressing {
   }
 
   /** Drop the stamp on the done pad; `land` runs at the moment of impact. */
-  dropStamp(x: number, z: number, land: () => void): void {
+  dropStamp(x: number, z: number, land: () => void, landY = 0.0015): void {
+    this.stampLandY = landY;
     this.stamp.position.set(x, 0.09, z);
     this.stamp.visible = true;
     this.stampT = 0;
@@ -312,17 +571,28 @@ export class DeskDressing {
       this.stampT += delta;
       const t = this.stampT;
       if (t < 0.22) {
-        this.stamp.position.y = 0.09 * (1 - (t / 0.22) ** 2) + 0.0015;
+        this.stamp.position.y = (0.09 - this.stampLandY) * (1 - (t / 0.22) ** 2) + this.stampLandY;
       } else {
         if (this.onStampLand) {
           this.onStampLand();
           this.onStampLand = null;
         }
-        this.stamp.position.y = 0.0015 + Math.max(0, t - 0.45) * 0.4;
+        this.stamp.position.y = this.stampLandY + Math.max(0, t - 0.45) * 0.4;
         if (t > 0.75) {
           this.stamp.visible = false;
           this.stampT = -1;
         }
+      }
+    }
+    this.folderOpen += (this.folderOpenTarget - this.folderOpen) * (1 - Math.exp(-delta * 10));
+    this.folderFlap.rotation.x = -(0.1 + 0.28 * this.folderOpen);
+    if (this.binKickT >= 0) {
+      this.binKickT += delta;
+      const k = this.binKickT / 0.35;
+      this.bin.scale.setScalar(1 + 0.08 * Math.sin(Math.min(1, k) * Math.PI) * (1 - k));
+      if (k >= 1) {
+        this.binKickT = -1;
+        this.bin.scale.setScalar(1);
       }
     }
     this.ghost.update(delta);
@@ -337,6 +607,10 @@ export class DeskDressing {
     for (const entity of this.entities) entity.dispose();
     this.caption.dispose();
     this.preview.dispose();
+    this.exitPlane.dispose();
+    this.historyTitle.dispose();
+    for (const material of this.styleMaterials.values()) material.dispose();
+    this.grabMaterial.dispose();
     for (const plane of [...this.slotPlanes, this.laterPlane, this.donePlane]) plane.dispose();
   }
 }
