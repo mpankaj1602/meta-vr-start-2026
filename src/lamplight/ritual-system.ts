@@ -17,7 +17,6 @@ import {
   TRAY_Z,
   classifyDrop,
   clampToDesk,
-  doneX,
   fanPosition,
   laterX,
   slotX,
@@ -28,8 +27,8 @@ import { Pointer, PointerTracker } from './pointers.js';
 import type { PointerId } from './pointers.js';
 import { SMALLER_STEP_PROMPT, STARTER_CARDS, proposeKeep, shouldOfferSmallerStep } from './rules.js';
 import { Sound } from './sound.js';
-import { clearState, loadState, newCardId, saveState, tomorrowCards } from './store.js';
-import type { SavedCard, SavedState, SavedZone } from './store.js';
+import { addHistory, clearState, historyOf, loadState, newCardId, saveState, tomorrowCards } from './store.js';
+import type { HistoryOutcome, SavedCard, SavedState, SavedZone } from './store.js';
 import { SurfaceProbe } from './surface.js';
 
 type Phase = 'locating' | 'placing' | 'settling' | 'asleep' | 'awake' | 'off';
@@ -38,7 +37,7 @@ const BLANK_ID = 'blank';
 const TAP_DISTANCE = 0.012;
 const TAP_SECONDS = 0.5;
 const NEAR_MARGIN = 0.02;
-const CHAIN_NEAR = 0.035;
+const CHAIN_NEAR = 0.045;
 const CHAIN_FAR = 0.03;
 /** How long to wait for the device to find the saved lamp spot. */
 const LOCATE_SECONDS = 5;
@@ -46,6 +45,34 @@ const LOCATE_SECONDS = 5;
 const SUMMON_SECONDS = 1.2;
 /** Beyond this distance the lamp is "at your desk", not in front of you. */
 const FAR_LAMP = 2.0;
+/** How far the chain can be pulled down, metres. */
+const CHAIN_TRAVEL = 0.05;
+/** Cards shown in the air when the folder or bin is opened. */
+const HISTORY_SHOWN = 12;
+const HISTORY_COLS = 4;
+const HISTORY_Y0 = 0.31;
+const HISTORY_Z = 0.03;
+const HISTORY_DX = 0.086;
+const HISTORY_DY = 0.062;
+
+interface CardAnim {
+  /** file: stamped, then slips into the folder. toss: crumpled and thrown in the bin. */
+  kind: 'file' | 'toss';
+  t: number;
+  sx: number;
+  sz: number;
+  sy: number;
+  ex: number;
+  ez: number;
+}
+
+interface HistoryItem {
+  visual: CardVisual;
+  entity: Entity;
+  t: number;
+  x: number;
+  y: number;
+}
 
 interface CardRuntime {
   id: string;
@@ -62,11 +89,14 @@ interface CardRuntime {
   order: number;
   removing: boolean;
   pulse: number;
+  /** Height the card rests at above the desk (on top of the folder, say). */
+  baseY: number;
+  anim: CardAnim | null;
 }
 
 interface Hold {
   pointer: Pointer;
-  kind: 'card' | 'lamp' | 'chain';
+  kind: 'card' | 'lamp' | 'chain' | 'exit' | 'folder' | 'bin';
   cardId: string;
   far: boolean;
   offsetX: number;
@@ -128,6 +158,10 @@ export class RitualSystem extends createSystem({
   private readonly offeredSmaller = new Set<string>();
   private time = 0;
   private placeInFrames = -1;
+  private chainSpringT = -1;
+  private chainSpringFrom = 0;
+  private history: { kind: HistoryOutcome; items: HistoryItem[] } | null = null;
+  private readonly histFrom = new Vector3();
 
   // Scratch values reused every frame.
   private readonly v1 = new Vector3();
@@ -140,11 +174,25 @@ export class RitualSystem extends createSystem({
   init(): void {
     this.state = loadState();
     this.sound = new Sound();
-    this.page = new PageOverlay(() => {
-      clearState();
-      location.reload();
+    this.page = new PageOverlay({
+      // Runs inside the click, so the browser grants the immersive session.
+      onGoToDesk: () => this.world.launchXR(),
+      onStartOver: () => {
+        clearState();
+        location.reload();
+      },
+      onStyle: (style) => {
+        this.state.lampStyle = style;
+        this.dressing?.setStyle(style);
+        this.save();
+      },
     });
-    this.page.showTomorrow(tomorrowCards(this.state));
+    this.page.setStyle(this.state.lampStyle);
+    this.refreshPage();
+    void navigator.xr
+      ?.isSessionSupported('immersive-ar')
+      .then((ok) => this.page.setXRSupported(ok))
+      .catch(() => undefined);
 
     this.pointers = new PointerTracker(this.world.renderer, this.world.camera, this.player, {
       onStart: (p) => this.onPinchStart(p),
@@ -191,12 +239,14 @@ export class RitualSystem extends createSystem({
     this.homePosition.copy(entity.object3D!.position);
     this.dressing = new DeskDressing(this.world, entity);
     this.dressing.setMirrored(this.state.mirrored);
+    this.dressing.setStyle(this.state.lampStyle);
     this.dressing.setTrayVisible(true);
     this.chainRestY = this.dressing.chain.position.y;
     // Remove anything retired in a session that was quit before switch-off.
     this.state.cards = this.state.cards.filter((c) => c.zone !== 'done');
     for (const saved of this.state.cards) this.spawnCard(saved.id, saved, saved.x, saved.z);
     this.phase = this.state.sessions > 0 && tomorrowCards(this.state).length > 0 ? 'off' : 'asleep';
+    this.sidesShown = this.state.sessions > 0;
     if (this.phase === 'off') this.dressing.showPreview(tomorrowCards(this.state));
     this.applyCardVisibility();
   }
@@ -351,6 +401,8 @@ export class RitualSystem extends createSystem({
       order: this.orderCounter++,
       removing: false,
       pulse: 0,
+      baseY: 0,
+      anim: null,
     };
     this.runtimes.set(id, rt);
     this.redraw(rt);
@@ -392,12 +444,35 @@ export class RitualSystem extends createSystem({
       rt.saved.z = rt.tz;
     }
     saveState(this.state);
+    this.refreshPage();
+  }
+
+  /** The flat page's summary: tomorrow's three and what is in each place. */
+  private refreshPage(): void {
+    let later = 0;
+    for (const c of this.state.cards) if (c.zone === 'later') later += 1;
+    let done = 0;
+    let letGo = 0;
+    for (const h of this.state.history) {
+      if (h.outcome === 'done') done += 1;
+      else letGo += 1;
+    }
+    this.page.showSummary({
+      tomorrow: tomorrowCards(this.state),
+      later,
+      done,
+      letGo,
+      firstRun: this.state.sessions === 0,
+    });
   }
 
   // ---------------------------------------------------------------- chain
 
   private pullChain(): void {
     this.sound.chainClick();
+    // The chain springs back and swings, even for a pointer-only pinch.
+    this.chainSpringT = 0;
+    this.chainSpringFrom = Math.max(this.chainSpringFrom, 0.02);
     if (this.phase === 'awake') this.switchOff();
     else if (this.phase === 'asleep' || this.phase === 'off') this.wake();
   }
@@ -485,7 +560,6 @@ export class RitualSystem extends createSystem({
     this.proposalId = '';
     const tomorrow = tomorrowCards(this.state);
     dressing.showPreview(tomorrow);
-    this.page.showTomorrow(tomorrow);
     dressing.ghost.hide();
     this.applyCardVisibility();
     if (tomorrow.length === SLOT_COUNT) {
@@ -521,7 +595,30 @@ export class RitualSystem extends createSystem({
         return;
       }
     }
-    // 3. The lamp itself: place it, or re-place it in one gesture.
+    // 3. Exit, the done folder and the bin.
+    const dressing = this.dressing;
+    if (this.immersive && this.hitsLocal(p, dressing.exitCentre(this.v3), 0.04, 0.03)) {
+      dressing.setExitPressed(true);
+      this.startHold(p, 'exit', '', !p.hasTip);
+      return;
+    }
+    if (this.sidesShown && phase !== 'placing') {
+      dressing.folderCentre(this.v3);
+      this.v3.y += 0.004;
+      if (this.hitsLocal(p, this.v3, 0.05, 0.045)) {
+        this.startHold(p, 'folder', '', !p.hasTip);
+        return;
+      }
+      dressing.binCentre(this.v3);
+      this.v3.y += 0.03;
+      if (this.hitsLocal(p, this.v3, 0.05, 0.045)) {
+        this.startHold(p, 'bin', '', !p.hasTip);
+        return;
+      }
+    }
+    // Any other pinch puts away the cards shown in the air.
+    if (this.history) this.closeHistory();
+    // 4. The lamp itself: place it, or re-place it in one gesture.
     const lampHit = this.hitsLamp(p, phase === 'placing');
     if (lampHit) this.startHold(p, 'lamp', '', lampHit === 'far');
     // A pinch on nothing, held, brings the lamp to the user (see update).
@@ -627,6 +724,15 @@ export class RitualSystem extends createSystem({
     return best ? { id: (best as CardRuntime).id, far } : null;
   }
 
+  /** Is the pointer at (near) or aiming at (far) a lamp-local point? */
+  private hitsLocal(p: Pointer, local: Vector3, nearRadius: number, farRadius: number): boolean {
+    this.v1.copy(local);
+    this.lamp!.object3D!.localToWorld(this.v1);
+    if (p.hasTip && p.tip.distanceTo(this.v1) < nearRadius) return true;
+    if (!p.hasRay) return false;
+    return rayPointDistance(p.rayOrigin, p.rayDir, this.v1, this.v2) < farRadius;
+  }
+
   private isHeld(cardId: string): boolean {
     for (const hold of this.holds.values()) if (hold.kind === 'card' && hold.cardId === cardId) return true;
     return false;
@@ -652,7 +758,9 @@ export class RitualSystem extends createSystem({
       this.v1.copy(p.tip);
       lamp.worldToLocal(this.v1);
       const radial = Math.hypot(this.v1.x, this.v1.z - (this.v1.y > 0.2 ? 0.05 : 0));
-      if (this.v1.y > -0.03 && this.v1.y < 0.33 && radial < (generous ? 0.1 : 0.065)) return 'near';
+      // The base edge takes a slightly wider pinch, matching its grab ring.
+      const limit = generous ? 0.1 : this.v1.y < 0.05 ? 0.078 : 0.065;
+      if (this.v1.y > -0.03 && this.v1.y < 0.33 && radial < limit) return 'near';
     }
     if (!p.hasRay) return null;
     lamp.getWorldPosition(this.v1);
@@ -670,9 +778,21 @@ export class RitualSystem extends createSystem({
     this.holds.delete(p.id);
     const tap = hold.moved < TAP_DISTANCE && this.time - hold.startTime < TAP_SECONDS;
     if (hold.kind === 'chain') {
-      this.dressing!.chain.position.y = this.chainRestY;
+      // Let go of the chain: it springs back from wherever it was pulled to.
+      this.chainSpringFrom = hold.pull;
+      this.chainSpringT = 0;
       // A pull, or a simple pinch on the bead for the pointer-only route.
-      if (hold.pull > 0.01 || tap || hold.far) this.pullChain();
+      if (hold.pull > 0.015 || tap || hold.far) this.pullChain();
+      return;
+    }
+    if (hold.kind === 'exit') {
+      this.dressing!.setExitPressed(false);
+      this.closeHistory();
+      this.world.exitXR();
+      return;
+    }
+    if (hold.kind === 'folder' || hold.kind === 'bin') {
+      this.toggleHistory(hold.kind === 'folder' ? 'done' : 'letGo');
       return;
     }
     if (hold.kind === 'lamp') {
@@ -759,22 +879,40 @@ export class RitualSystem extends createSystem({
         break;
       }
       case 'done': {
-        this.setZone(rt, 'done');
-        const n = this.countZone('done', rt);
-        rt.tx = doneX(this.state.mirrored) + ((n % 3) - 1) * 0.004;
-        rt.tz = TRAY_Z + (n % 3) * 0.004;
-        dressing.dropStamp(rt.tx, rt.tz, () => {
-          this.sound.stamp();
-          this.redraw(rt);
-          dressing.say('[stamp] Done', 1.5);
-        });
+        // Stamped on top of the folder, then it slips inside.
+        dressing.folderCentre(this.v3);
+        rt.tx = this.v3.x;
+        rt.tz = this.v3.z;
+        rt.baseY = 0.009;
+        this.retireCard(rt, 'done');
+        const ex = this.v3.x;
+        const ez = this.v3.z;
+        dressing.dropStamp(
+          rt.tx,
+          rt.tz,
+          () => {
+            this.sound.stamp();
+            this.redraw(rt);
+            dressing.say('[stamp] Done', 1.5);
+            rt.anim = { kind: 'file', t: -0.35, sx: ex, sz: ez, sy: rt.baseY, ex, ez };
+          },
+          rt.baseY + 0.003,
+        );
         break;
       }
       case 'letGo': {
-        this.state.cards = this.state.cards.filter((c) => c.id !== rt.id);
-        this.removeCard(rt, true);
+        // Crumpled, then thrown in the bin.
+        this.retireCard(rt, 'letGo');
         this.sound.letGo();
         dressing.say('Let go', 1.5);
+        if (!this.sidesShown) {
+          // First run, before the bin is on the desk: the card simply drifts away.
+          rt.removing = false;
+          this.removeCard(rt, true);
+          break;
+        }
+        dressing.binCentre(this.v3);
+        rt.anim = { kind: 'toss', t: 0, sx: rt.tx, sz: rt.tz, sy: 0, ex: this.v3.x, ez: this.v3.z };
         break;
       }
       case 'loose':
@@ -785,6 +923,149 @@ export class RitualSystem extends createSystem({
       this.applyCardVisibility();
       if (this.runtimes.has(BLANK_ID)) dressing.say('Add anything new', 3);
     }
+  }
+
+  /** Take a card off the desk for good and record where it went. */
+  private retireCard(rt: CardRuntime, outcome: HistoryOutcome): void {
+    const saved = rt.saved!;
+    this.state.cards = this.state.cards.filter((c) => c.id !== rt.id);
+    addHistory(this.state, saved, outcome);
+    if (outcome === 'done') saved.zone = 'done';
+    rt.removing = true;
+    if (this.proposalId === rt.id) this.clearProposal();
+    // Shown in the air already? Refresh so the new card is there.
+    if (this.history?.kind === outcome) {
+      this.closeHistory();
+    }
+  }
+
+  // ---------------------------------------------------------------- history
+
+  /** Pinch the folder or the bin: its recent cards rise into the air, readable. */
+  private toggleHistory(kind: HistoryOutcome): void {
+    const reopening = this.history?.kind === kind;
+    this.closeHistory();
+    if (reopening) return;
+    const dressing = this.dressing!;
+    const entries = historyOf(this.state, kind, HISTORY_SHOWN);
+    if (entries.length === 0) {
+      dressing.say(kind === 'done' ? 'Folder is empty' : 'Bin is empty', 2);
+      return;
+    }
+    if (kind === 'done') dressing.folderCentre(this.histFrom);
+    else dressing.binCentre(this.histFrom);
+    this.histFrom.y += 0.03;
+    const rows = Math.ceil(entries.length / HISTORY_COLS);
+    const items: HistoryItem[] = [];
+    entries.forEach((entry, i) => {
+      const row = Math.floor(i / HISTORY_COLS);
+      const inRow = Math.min(HISTORY_COLS, entries.length - row * HISTORY_COLS);
+      const col = i % HISTORY_COLS;
+      const visual = new CardVisual(`History_${entry.id}`);
+      visual.draw({ kind: 'text', text: entry.text, done: kind === 'done', own: entry.own });
+      visual.standUp();
+      visual.root.rotation.x = Math.PI / 2 - 0.2;
+      visual.setBrightness(0.75);
+      visual.setOpacity(0);
+      visual.root.position.copy(this.histFrom);
+      visual.root.scale.setScalar(0.3);
+      const entity = this.world.createTransformEntity(visual.root, { parent: this.lamp! });
+      items.push({
+        visual,
+        entity,
+        t: -i * 0.035,
+        x: (col - (inRow - 1) / 2) * HISTORY_DX,
+        y: HISTORY_Y0 + (rows - 1 - row) * HISTORY_DY,
+      });
+    });
+    this.history = { kind, items };
+    let total = 0;
+    for (const h of this.state.history) if (h.outcome === kind) total += 1;
+    const label = kind === 'done' ? `Done · ${total}` : `Let go · ${total}`;
+    dressing.showHistoryTitle(label, 0, HISTORY_Y0 + (rows - 1) * HISTORY_DY + 0.05, HISTORY_Z);
+    this.sound.slotKnock();
+  }
+
+  private closeHistory(): void {
+    if (!this.history) return;
+    for (const item of this.history.items) {
+      item.visual.dispose();
+      item.entity.dispose();
+    }
+    this.history = null;
+    this.dressing?.showHistoryTitle('', 0, 0, 0);
+  }
+
+  private updateHistory(delta: number): void {
+    if (!this.history) return;
+    for (const item of this.history.items) {
+      item.t += delta;
+      const u = smoothstep(0, 0.45, item.t);
+      const root = item.visual.root;
+      root.position.set(
+        this.histFrom.x + (item.x - this.histFrom.x) * u,
+        this.histFrom.y + (item.y - this.histFrom.y) * u,
+        this.histFrom.z + (HISTORY_Z - this.histFrom.z) * u,
+      );
+      root.scale.setScalar(0.3 + 0.7 * u);
+      item.visual.setOpacity(Math.min(1, u * 1.5));
+    }
+  }
+
+  /** Stamped cards slip into the folder; let-go cards crumple and fly to the bin. */
+  private animateCard(rt: CardRuntime, delta: number): boolean {
+    const a = rt.anim!;
+    a.t += delta;
+    const root = rt.visual.root;
+    rt.visual.setGlow(0);
+    if (a.kind === 'file') {
+      if (a.t < 0) {
+        root.position.set(a.sx, a.sy, a.sz);
+        return false;
+      }
+      this.dressing!.setFolderOpen(true);
+      const mouthZ = a.ez + 0.05;
+      if (a.t < 0.3) {
+        const u = smoothstep(0, 0.3, a.t);
+        root.position.set(
+          a.sx + (a.ex - a.sx) * u,
+          a.sy + (0.0012 - a.sy) * u + 0.012 * Math.sin(u * Math.PI),
+          a.sz + (mouthZ - a.sz) * u,
+        );
+      } else {
+        const u = smoothstep(0.3, 0.8, a.t);
+        root.position.set(a.ex, 0.0012, mouthZ + (a.ez - 0.002 - mouthZ) * u);
+        rt.visual.setOpacity(1 - smoothstep(0.65, 0.85, a.t));
+      }
+      if (a.t >= 0.85) {
+        this.dressing!.setFolderOpen(false);
+        return true;
+      }
+      return false;
+    }
+    // toss
+    if (a.t < 0.3) {
+      const u = a.t / 0.3;
+      rt.visual.crumple(u);
+      rt.visual.setBall(smoothstep(0.45, 1, u));
+      rt.visual.setOpacity(1 - smoothstep(0.6, 1, u));
+      root.position.set(a.sx, 0.02 * u, a.sz);
+      return false;
+    }
+    rt.visual.setOpacity(0);
+    rt.visual.setBall(1);
+    const u = Math.min(1, (a.t - 0.3) / 0.65);
+    root.position.set(
+      a.sx + (a.ex - a.sx) * u,
+      0.02 + (0.008 - 0.02) * u + 0.16 * Math.sin(u * Math.PI),
+      a.sz + (a.ez - a.sz) * u,
+    );
+    if (u >= 1) {
+      this.sound.slotKnock();
+      this.dressing!.kickBin();
+      return true;
+    }
+    return false;
   }
 
   private countZone(zone: SavedZone, except: CardRuntime): number {
@@ -984,10 +1265,12 @@ export class RitualSystem extends createSystem({
       } else if (hold.kind === 'chain') {
         if (hold.needsAnchor && p.hasTip) hold.chainStartY = p.tip.y;
         hold.needsAnchor = false;
-        const pull = p.hasTip && !hold.far ? clamp(hold.chainStartY - p.tip.y, 0, 0.03) : 0;
+        const pull = p.hasTip && !hold.far ? clamp(hold.chainStartY - p.tip.y, 0, CHAIN_TRAVEL) : 0;
         hold.pull = Math.max(hold.pull, pull);
+        this.chainSpringT = -1;
         dressing.chain.position.y = this.chainRestY - pull;
-      } else {
+        dressing.chain.rotation.set(0, 0, 0);
+      } else if (hold.kind === 'card') {
         const rt = this.runtimes.get(hold.cardId);
         if (!rt || !this.deskPointFor(p, hold.far, this.deskPoint)) continue;
         if (hold.needsAnchor) {
@@ -1027,6 +1310,10 @@ export class RitualSystem extends createSystem({
       }
     }
     dressing.setHighlight(highlight);
+    this.updateChain(delta);
+    dressing.setSidesVisible(this.sidesShown && this.phase !== 'locating');
+    dressing.setExitVisible(this.immersive);
+    this.updateHistory(delta);
 
     // Light: on while awake, a short sweep when a session opens, gentle breath.
     const target = this.phase === 'awake' ? 1 : 0;
@@ -1059,19 +1346,72 @@ export class RitualSystem extends createSystem({
     dressing.update(delta, this.eye, this.v1, this.immersive ? this.light : 0);
   }
 
+  /** Spring and swing after a pull; the pull glows when a fingertip is near. */
+  private updateChain(delta: number): void {
+    const dressing = this.dressing!;
+    if (this.chainSpringT >= 0) {
+      this.chainSpringT += delta;
+      const t = this.chainSpringT;
+      const k = Math.min(1, this.chainSpringFrom / 0.03);
+      dressing.chain.position.y = this.chainRestY - this.chainSpringFrom * Math.exp(-6 * t) * Math.cos(17 * t);
+      dressing.chain.rotation.z = 0.22 * k * Math.exp(-2.2 * t) * Math.sin(8.5 * t);
+      dressing.chain.rotation.x = 0.12 * k * Math.exp(-2.6 * t) * Math.sin(6.3 * t + 0.8);
+      if (t > 2.4) {
+        this.chainSpringT = -1;
+        this.chainSpringFrom = 0;
+        dressing.chain.position.y = this.chainRestY;
+        dressing.chain.rotation.set(0, 0, 0);
+      }
+    }
+    let glow = 0;
+    for (const hold of this.holds.values()) if (hold.kind === 'chain') glow = 1;
+    if (glow === 0 && this.phase !== 'placing' && this.phase !== 'locating') {
+      dressing.chainBead.getWorldPosition(this.v1);
+      for (const p of [this.pointers.left, this.pointers.right]) {
+        if (!p.hasTip) continue;
+        glow = Math.max(glow, 1 - smoothstep(0.03, 0.1, p.tip.distanceTo(this.v1)));
+      }
+    }
+    dressing.setChainGlow(glow);
+
+    // Base grab ring: lit while the lamp is held, glowing as a fingertip nears the edge.
+    let grab = 0;
+    for (const hold of this.holds.values()) if (hold.kind === 'lamp') grab = 1;
+    if (grab === 0 && this.immersive && this.phase !== 'locating' && this.phase !== 'settling') {
+      const lamp = this.lamp!.object3D!;
+      for (const p of [this.pointers.left, this.pointers.right]) {
+        if (!p.hasTip) continue;
+        this.v1.copy(p.tip);
+        lamp.worldToLocal(this.v1);
+        const edge =
+          Math.abs(Math.hypot(this.v1.x, this.v1.z) - 0.06) + Math.max(0, this.v1.y - 0.04) + Math.max(0, -0.02 - this.v1.y);
+        grab = Math.max(grab, 0.8 * (1 - smoothstep(0.012, 0.045, edge)));
+      }
+    }
+    dressing.setGrabGlow(grab);
+  }
+
   private updateCards(delta: number, time: number): void {
     const follow = 1 - Math.exp(-delta * 22);
     const settle = 1 - Math.exp(-delta * 10);
     for (const entity of this.queries.cards.entities) {
       const rt = this.runtimes.get(entity.getValue(Card, 'cardId') as string);
       if (!rt) continue;
+      if (rt.anim) {
+        if (this.animateCard(rt, delta)) {
+          this.runtimes.delete(rt.id);
+          rt.visual.dispose();
+          entity.dispose();
+        }
+        continue;
+      }
       const held = this.isHeld(rt.id);
       const k = held ? follow : settle;
       rt.x += (rt.tx - rt.x) * k;
       rt.z += (rt.tz - rt.z) * k;
       if (!held) rt.lift += (0 - rt.lift) * settle;
       rt.fade += (rt.fadeTarget - rt.fade) * (1 - Math.exp(-delta * 6));
-      rt.visual.root.position.set(rt.x, rt.lift + 0.0003 * (rt.order % 24), rt.z);
+      rt.visual.root.position.set(rt.x, rt.baseY + rt.lift + 0.0003 * (rt.order % 24), rt.z);
       rt.visual.root.visible = rt.fade > 0.01;
       rt.visual.setOpacity(Math.min(1, rt.fade));
       const dist = Math.hypot(rt.x - POOL_X, rt.z - POOL_Z);
