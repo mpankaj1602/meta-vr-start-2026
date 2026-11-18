@@ -246,7 +246,8 @@ export class RitualSystem extends createSystem({
     this.state.cards = this.state.cards.filter((c) => c.zone !== 'done');
     for (const saved of this.state.cards) this.spawnCard(saved.id, saved, saved.x, saved.z);
     this.phase = this.state.sessions > 0 && tomorrowCards(this.state).length > 0 ? 'off' : 'asleep';
-    this.sidesShown = this.state.sessions > 0;
+    // The folder, bin and side trays are on the desk from the very first run.
+    this.sidesShown = true;
     if (this.phase === 'off') this.dressing.showPreview(tomorrowCards(this.state));
     this.applyCardVisibility();
   }
@@ -520,8 +521,9 @@ export class RitualSystem extends createSystem({
       });
     }
     if (!this.runtimes.has(BLANK_ID)) this.placeInFan(this.spawnCard(BLANK_ID, null, 0, SLOT_Z));
+    // The three slots light up once the first own card is written (first run only).
     this.slotsShown = !firstRun || this.state.cards.some((c) => c.own);
-    this.sidesShown = !firstRun;
+    this.sidesShown = true;
     this.applyCardVisibility();
     this.save();
 
@@ -1330,7 +1332,9 @@ export class RitualSystem extends createSystem({
     }
     dressing.setHighlight(highlight);
     this.updateChain(delta);
-    dressing.setSidesVisible(this.sidesShown && this.phase !== 'locating');
+    // Hidden only while the lamp is being found or carried to its spot.
+    const lampSettled = this.phase !== 'locating' && this.phase !== 'placing' && this.phase !== 'settling';
+    dressing.setSidesVisible(this.sidesShown && lampSettled);
     dressing.setExitVisible(this.immersive);
     this.updateHistory(delta);
 
